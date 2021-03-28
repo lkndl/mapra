@@ -19,12 +19,14 @@ class dataset:
         self.full_set = Namespace(**{'seq_annotations': dict()})
         self.reduced_set = Namespace(**{'seq_annotations': dict()})
         self.metrics = set()
+        seq_lengths = dict()
+        columns_hashes = set()
 
-        def get_annotations(full=False):
-            if full:
-                return self.full_set.seq_annotations
-            else:
+        def get_annotations(reduced=True):
+            if reduced:
                 return self.reduced_set.seq_annotations
+            else:
+                return self.full_set.seq_annotations
 
         for fasta in wd.rglob('*.fasta'):
             gd = dataset.path_regex.match(fasta.name).groupdict()
@@ -54,6 +56,11 @@ class dataset:
                     warnings.warn('overwriting annotations for ' + acc)
                 metric_annotations[acc] = record_annotation
 
+                # save lengths in flat dictionary
+                if acc in seq_lengths and seq_lengths[acc] != len(record):
+                    warnings.warn('conflicting sequence lengths for ' + acc)
+                seq_lengths[acc] = len(record)
+
         self.tables = dict()
 
         for tsv in wd.rglob('*.tsv'):
@@ -71,17 +78,20 @@ class dataset:
             # filter out rows with undetermined UniProt_ID  # TODO will this change later?
             df = df.loc[df.UniProt_ID != '-']
             df[['MUTATION', 'SOURCE']] = df.MUTATION.str.rstrip(')').str.split(' \(Based on ', expand=True)
-            df['MUTATION_COUNT'] = df.MUTATION.str.strip().str.count(' ') + 1
+            df['MUT_COUNT'] = df.MUTATION.str.strip().str.count(' ') + 1
             df['DATASET'] = df.UniProt_ID.isin(self.reduced_set.seq_annotations[metric].keys()) \
                 .astype(int).map(lambda c: ['full_set', 'reduced_set'][c])
             df.loc[~df.MUTATION.str.match(dataset.mutation_regex), 'DATASET'] = 'invalid'
+            df['LENGTH'] = df.UniProt_ID.apply(lambda uniprot: seq_lengths.get(uniprot, 0))
+            df['REPEATS'] = df.groupby(['UniProt_ID', 'MUTATION']).transform('count')['LENGTH']
 
+            columns_hashes.add(hash(tuple(sorted(df.columns))))
             self.tables[metric] = df.reset_index(drop=True)
 
-        # check if the columns agree first
+        assert len(columns_hashes) == 1, 'TSV headers were not identical'
         self.__dataframe__ = pd.concat(self.tables.values(), keys=self.tables.keys()) \
-            .reset_index().rename(columns={'level_0': 'delta'}).drop(columns='level_1') \
-            .sort_values(by=['UniProt_ID', 'delta']).reset_index().drop(columns='index')
+            .reset_index().rename(columns={'level_0': 'DELTA'}).drop(columns='level_1') \
+            .sort_values(by=['UniProt_ID', 'DELTA']).reset_index().drop(columns='index')
 
     @property
     def dataframe(self):
