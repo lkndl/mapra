@@ -1,6 +1,5 @@
 import re
 import warnings
-from argparse import Namespace
 from pathlib import Path
 
 import pandas as pd
@@ -8,90 +7,77 @@ from Bio import SeqIO
 
 
 class dataset:
-    uniprot_header_rgx = re.compile(r'(?P<db>(?:sp|tr))\|(?P<accession>.+?)\|(?P<name>\S+?) ' \
-                                    '(?P<full_name>.+?) OS=(?P<organism>.+?) OX=(?P<taxon_id>.+?) ' \
-                                    '(GN=(?P<gene>.+?) )?PE=(?P<evidence_level>.+?) SV=(?P<version>.+?)$')
-    path_regex = re.compile(r'.*?_prothermdb_(?P<measure>.+?)(?:(?:_)?(?P<dataset>rep_seq|a?)?\.fasta|\.tsv)')
+    path_regex = re.compile(r'.*?_prothermdb_(?P<measurement>.+?)(?:(?:_)?(?P<dataset>rep_seq|a?)?\.fasta|\.tsv)')
     mutation_regex = re.compile(r'( ?(?:\S+:)?[ARNDCQEGHILKMFPSTWYV]\d{1,9}[ARNDCQEGHILKMFPSTWYV] ?)+')
 
     def __init__(self, wd=Path('.')):
 
-        self.full_set = Namespace(**{'seq_annotations': dict()})
-        self.reduced_set = Namespace(**{'seq_annotations': dict()})
-        self.metrics = set()
-        seq_lengths = dict()
-        columns_hashes = set()
-
-        def get_annotations(reduced=True):
-            if reduced:
-                return self.reduced_set.seq_annotations
-            else:
-                return self.full_set.seq_annotations
+        sets = [dict(), dict()]  # full_set, reduced_set
 
         for fasta in wd.rglob('*.fasta'):
-            gd = dataset.path_regex.match(fasta.name).groupdict()
-            if not gd:
+            m = dataset.path_regex.match(fasta.name)
+            if not m:
                 warnings.warn('unexpected FASTA filename: ' + str(fasta), RuntimeWarning)
                 continue
-            metric = gd['measure']
-            self.metrics.add(metric)
-            seq_annotations = get_annotations(bool(gd['dataset']))
+            gd = m.groupdict()
+            annotations = sets[bool(gd['dataset'])]
+            ms = gd['measurement']
+            if ms in annotations:
+                warnings.warn('overwriting sequence data for ' + ms, RuntimeWarning)
+            annotations[ms] = {record.id: len(record) for record in SeqIO.parse(fasta, 'fasta')}
 
-            if metric not in seq_annotations:
-                seq_annotations[metric] = dict()
-            metric_annotations = seq_annotations[metric]
+        tsvs = list(wd.rglob('*.tsv'))
+        if len(tsvs) != 1:
+            warnings.warn('found not exactly one TSV with annotations:\n' + '\n'.join(tsvs))
 
-            for record in SeqIO.parse(fasta, 'fasta'):
-                m = dataset.uniprot_header_rgx.match(record.description)
-                if not m:
-                    warnings.warn('unexpected FASTA header: ' + record.description, RuntimeWarning)
-                    continue
-                # save header information
-                record_annotation = m.groupdict()
-                # as well as path and sequence length
-                record_annotation.update(path=str(fasta), length=len(record))
-                # using the UniProt accession as id
-                acc = record_annotation['accession']
-                if acc in metric_annotations:
-                    warnings.warn('overwriting annotations for ' + acc)
-                metric_annotations[acc] = record_annotation
+        df = pd.read_csv(tsvs[0], sep='\t')
+        # filter out rows with undetermined '-' or 'wild-type' mutation
+        len_before = len(df)
+        df = df.loc[~df.MUTATION.isin(['-', 'wild-type'])]
+        # filter out rows with undetermined UniProt_ID
+        df = df.loc[df.UniProt_ID != '-']
+        if len_before != len(df):
+            warnings.warn('found %d rows with immediately invalid annotation'
+                          % (len_before - len(df)), RuntimeWarning)
+        df[['MUTATION', 'SOURCE']] = df.MUTATION.str.rstrip(')') \
+            .str.split(' \(Based on ', expand=True)
+        df['MUT_COUNT'] = df.MUTATION.str.strip().str.count(' ') + 1
 
-                # save lengths in flat dictionary
-                if acc in seq_lengths and seq_lengths[acc] != len(record):
-                    warnings.warn('conflicting sequence lengths for ' + acc)
-                seq_lengths[acc] = len(record)
+        metrics = {'∆Tm_(C)', '∆∆G_(kcal/mol)', '∆∆G_H2O_(kcal/mol)'}
+        df.melt(id_vars=[c for c in df.columns if c not in metrics], value_vars=metrics)
 
-        self.tables = dict()
+        df = df.melt(id_vars=[c for c in df.columns if c not in metrics],
+                     value_vars=metrics, var_name='DELTA')
+        df = df.loc[df.value != '-'].reset_index()
 
-        for tsv in wd.rglob('*.tsv'):
-            gd = dataset.path_regex.match(tsv.name).groupdict()
-            if not gd:
-                warnings.warn('unexpected TSV filename: ' + str(tsv), RuntimeWarning)
-                continue
-            metric = gd['measure']
-            if metric not in self.metrics:
-                warnings.warn('unexpected metric: ' + metric, RuntimeWarning)
+        pivoted = df.pivot(index='index', columns='DELTA', values='value')
+        df = df.merge(pivoted, on='index').drop(columns=['index', 'value'])
 
-            df = pd.read_csv(tsv, sep='\t')
-            # filter out rows with undetermined '-' or 'wild-type' mutation
-            df = df.loc[~df.MUTATION.isin(['-', 'wild-type'])]
-            # filter out rows with undetermined UniProt_ID  # TODO will this change later?
-            df = df.loc[df.UniProt_ID != '-']
-            df[['MUTATION', 'SOURCE']] = df.MUTATION.str.rstrip(')').str.split(' \(Based on ', expand=True)
-            df['MUT_COUNT'] = df.MUTATION.str.strip().str.count(' ') + 1
-            df['DATASET'] = df.UniProt_ID.isin(self.reduced_set.seq_annotations[metric].keys()) \
-                .astype(int).map(lambda c: ['full_set', 'reduced_set'][c])
-            df.loc[~df.MUTATION.str.match(dataset.mutation_regex), 'DATASET'] = 'invalid'
-            df['LENGTH'] = df.UniProt_ID.apply(lambda uniprot: seq_lengths.get(uniprot, 0))
-            df['REPEATS'] = df.groupby(['UniProt_ID', 'MUTATION']).transform('count')['LENGTH']
+        translate = lambda m: {'∆Tm_(C)': 'melttemp', '∆∆G_(kcal/mol)': 'delta_g',
+                               '∆∆G_H2O_(kcal/mol)': 'delta_g_h2o'}.get(m, 'invalid')
 
-            columns_hashes.add(hash(tuple(sorted(df.columns))))
-            self.tables[metric] = df.reset_index(drop=True)
+        get_dataset = lambda s: 'reduced_set' if s.UniProt_ID in sets[1][translate(s.DELTA)].keys() \
+            else 'full_set' if s.UniProt_ID in sets[0][translate(s.DELTA)].keys() else 'invalid'
+        df['DATASET'] = df.apply(get_dataset, axis=1)
 
-        assert len(columns_hashes) == 1, 'TSV headers were not identical'
-        self.__dataframe__ = pd.concat(self.tables.values(), keys=self.tables.keys()) \
-            .reset_index().rename(columns={'level_0': 'DELTA'}).drop(columns='level_1') \
-            .sort_values(by=['UniProt_ID', 'DELTA']).reset_index().drop(columns='index')
+        get_length = lambda s: sets[1][translate(s.DELTA)][s.UniProt_ID] if s.DATASET == 'reduced_set' \
+            else sets[0][translate(s.DELTA)][s.UniProt_ID] if s.DATASET == 'full_set' else -1
+        df['LENGTH'] = df.apply(get_length, axis=1)
+
+        # cut off additional values in parentheses
+        for m in metrics:
+            df[m] = df[m].str.split('(').str[0].astype(float)
+
+        # def get_repeats_and_std(gdf):
+        #     gdf['REPEATS'] = len(gdf)
+        #     gdf['STD'] = gdf[gdf.DELTA.iat[0]].std()
+        #     return gdf
+        # df = df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).apply(get_repeats_and_std)
+        df['REPEATS'] = df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).transform('count')['LENGTH']
+
+        self.__dataframe__ = df.sort_values(by=['UniProt_ID', 'MUTATION']) \
+            .reset_index().drop(columns='index')
+        self.full_set_lengths, self.reduced_set_lengths = sets
 
     @property
     def dataframe(self):
