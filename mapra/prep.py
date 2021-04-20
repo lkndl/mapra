@@ -10,7 +10,7 @@ class dataset:
     path_regex = re.compile(r'.*?_prothermdb_(?P<measurement>.+?)(?:(?:_)?(?P<dataset>rep_seq|a?)?\.fasta|\.tsv)')
     mutation_regex = re.compile(r'( ?(?:\S+:)?[ARNDCQEGHILKMFPSTWYV]\d{1,9}[ARNDCQEGHILKMFPSTWYV] ?)+')
 
-    def __init__(self, wd=Path('.')):
+    def __init__(self, wd=Path('.'), legacy=False):
 
         sets = [dict(), dict()]  # full_set, reduced_set
 
@@ -75,9 +75,23 @@ class dataset:
         # df = df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).apply(get_repeats_and_std)
         df['REPEATS'] = df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).transform('count')['LENGTH']
 
+        if not legacy:
+            df = df.rename(columns={'∆Tm_(C)': 'dtemp', '∆∆G_(kcal/mol)': 'ddg', '∆∆G_H2O_(kcal/mol)': 'h2o'})
+            df['DELTA'] = df['DELTA'].apply({'∆Tm_(C)': 'dtemp', '∆∆G_(kcal/mol)': 'ddg', '∆∆G_H2O_(kcal/mol)': 'h2o'}.get)
+            # df = df.drop(columns=['MEASURE', 'METHOD', 'SOURCE', 'T_(C)'])
+            df = df.drop(columns=['SOURCE', 'T_(C)'])
+
         self.__dataframe__ = df.sort_values(by=['UniProt_ID', 'MUTATION']) \
             .reset_index().drop(columns='index')
         self.full_set_lengths, self.reduced_set_lengths = sets
+
+        # TODO i need a background distribution: for example at every kth position?
+        # TODO class balance between training and test set is really important
+        # TODO use a measure that is sensitive for class imbalance, accuracy would fail horribly
+        # TODO slide numbers
+        # TODO linear regression of stab change depending on pH value -> linear equation with error range
+        # MARK how to deal with singleton records where no slope can be inferred? background distr
+        # TODO 20x20 heatmap of changes per single mutation
 
     @property
     def dataframe(self):
