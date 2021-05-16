@@ -1,12 +1,13 @@
+import h5py
+import pickle
 import re
-import sys
 import warnings
 from pathlib import Path
-from scipy.stats import norm
-import os
 
+import numpy as np
 import pandas as pd
 from Bio import SeqIO
+from scipy.stats import norm
 
 
 def abbrev(mutation_pattern):
@@ -20,6 +21,7 @@ class dataset:
     def __init__(self, wd=Path('.').resolve().parent, legacy=False):
         print(wd)
         sets = [dict(), dict()]  # full_set, reduced_set
+        self.mbed_file = wd / 'extracted.pickle'
 
         for fasta in wd.rglob('*.fasta'):
             m = dataset.path_regex.match(fasta.name)
@@ -82,6 +84,7 @@ class dataset:
         #     return gdf
         # df = df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).apply(get_repeats_and_std)
         # MARK use transform('count') to create a new column and count() otherwise
+        # TODO this ignores the pH - that's not real repeats
         df['REPEATS'] = df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).transform('count')['LENGTH']
 
         self.order = ['dtemp', 'ddg', 'h2o']
@@ -103,6 +106,7 @@ class dataset:
         self.__dataframe__ = df.sort_values(by=['UniProt_ID', 'MUTATION']) \
             .reset_index().drop(columns='index')
         (wd / 'plots').mkdir(parents=True, exist_ok=True)
+        self.distances = dict()
 
         # TODO i need a background distribution: for example at every kth position?
         # TODO class balance between training and test set is really important
@@ -113,6 +117,13 @@ class dataset:
     @property
     def dataframe(self):
         return self.__dataframe__.copy(deep=True)
+
+    def dataframe_abbrev(self, reduced=False):
+        df = self.__dataframe__.copy(deep=True)
+        if reduced:
+            df = df.loc[df.DATASET == 'reduced_set']
+        df.MUTATION = df.MUTATION.apply(abbrev)
+        return df
 
     def dataframe_remerged(self, reduced=False, df=False):
         """Re-merge separate repeat records for different DELTAs but measured at identical pH"""
@@ -146,7 +157,10 @@ class dataset:
         return df
 
     def dataframe_repeats_avg(self, reduced=False):
-        """Use the average measured stability change, ignoring actual repeats and pH series."""
+        """
+        Use the average measured stability change, ignoring actual repeats and pH series.
+        Whether a measurement is part of a series at the same pH does not matter.
+        """
         df = self.dataframe
         if reduced:
             df = df.loc[df.DATASET == 'reduced_set']
@@ -165,6 +179,7 @@ class dataset:
 
         # calculate scaling factors from the pH
         factors = df.pH.apply(norm.pdf, args=(7, 2)) / norm.pdf(7, 7, 2)
+        factors.fillna(1, inplace=True)
 
         # scale all three measurements
         df.dtemp *= factors
@@ -172,3 +187,34 @@ class dataset:
         df.h2o *= factors
 
         return df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).mean().reset_index()
+
+    def read_mbeds(self, wd=Path('.').resolve().parent, extend=0):
+        print(wd)
+        mbeds = dict()
+        with h5py.File(wd / 'all_sequences_prothermdb_HALF.h5', 'r') as f:
+            for i, key in enumerate(f.keys()):
+                pieces = key.split('_')
+                uniprot_id, variant = pieces[0], '_'.join(pieces[1:])
+                if uniprot_id not in mbeds:
+                    mbeds[uniprot_id] = dict()
+                if not variant:
+                    mbeds[uniprot_id]['wt'] = np.array(f[key])
+                else:
+                    positions = [int(p[:-1]) - 1 for p in pieces[1:]]
+                    # extend to neighbourhood
+                    positions = sorted(set([c for ran in [list(range(
+                        max(0, p - extend), min(len(f[key]), p + extend + 1)))
+                        for p in positions] for c in ran]))
+                    mbeds[uniprot_id][variant] = np.array(f[key])[positions, :]
+        with open(self.mbed_file, 'wb') as f:
+            pickle.dump(mbeds, f)
+
+        return f'read {sum(len(v) for v in mbeds.values())} embeddings ' \
+               f'for {len(mbeds)} proteins and wrote to {self.mbed_file}'
+
+    @property
+    def mbeds(self):
+        mbeds = dict()
+        with open(self.mbed_file, 'rb') as f:
+            mbeds = pickle.load(f)
+        return mbeds
