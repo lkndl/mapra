@@ -8,10 +8,23 @@ import numpy as np
 import pandas as pd
 from Bio import SeqIO
 from scipy.stats import norm
+from dataclasses import dataclass
+
+from sklearn import linear_model, metrics, preprocessing
+from sklearn.datasets import load_digits
+from sklearn.model_selection import train_test_split
+from sklearn.metrics.pairwise import paired_distances
 
 
 def abbrev(mutation_pattern):
     return '_'.join(i[1:] for i in mutation_pattern.split(' '))
+
+
+@dataclass
+class mbed_dists:
+    data: pd.DataFrame
+    delta_labels: list
+    metric_labels: list
 
 
 class dataset:
@@ -21,7 +34,8 @@ class dataset:
     def __init__(self, wd=Path('.').resolve().parent, legacy=False):
         print(wd)
         sets = [dict(), dict()]  # full_set, reduced_set
-        self.mbed_file = wd / 'extracted.pickle'
+        self.__mbeds__ = None
+        self.__dataframe_pairwise__ = None
 
         for fasta in wd.rglob('*.fasta'):
             m = dataset.path_regex.match(fasta.name)
@@ -188,10 +202,17 @@ class dataset:
 
         return df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).mean().reset_index()
 
-    def read_mbeds(self, wd=Path('.').resolve().parent, extend=0):
-        print(wd)
+    def read_mbeds(self, extend=0, h5_file=Path('.').resolve().parent
+                                           / 'all_sequences_prothermdb_HALF.h5'):
+        """
+        Reads embeddings from the H5 file to self.mbeds.
+        :param extend: The number of neighbors on each size; e.g. 8 means a region size of 17
+        :param h5_file: the path to the file with embeddings
+        :return: outfile: the path to the pickled extracted embeddings
+        """
+        print(f'reading {h5_file} ...')
         mbeds = dict()
-        with h5py.File(wd / 'all_sequences_prothermdb_HALF.h5', 'r') as f:
+        with h5py.File(h5_file, 'r') as f:
             for i, key in enumerate(f.keys()):
                 pieces = key.split('_')
                 uniprot_id, variant = pieces[0], '_'.join(pieces[1:])
@@ -206,15 +227,90 @@ class dataset:
                         max(0, p - extend), min(len(f[key]), p + extend + 1)))
                         for p in positions] for c in ran]))
                     mbeds[uniprot_id][variant] = np.array(f[key])[positions, :]
-        with open(self.mbed_file, 'wb') as f:
+
+        self.__mbeds__ = mbeds
+        outfile = h5_file.parent / f'extracted_{extend}.pkl'
+
+        with open(outfile, 'wb') as f:
             pickle.dump(mbeds, f)
 
-        return f'read {sum(len(v) for v in mbeds.values())} embeddings ' \
-               f'for {len(mbeds)} proteins and wrote to {self.mbed_file}'
+        print(f'read {sum(len(v) for v in mbeds.values())} embeddings '
+              f'for {len(mbeds)} proteins, each SAV with {extend} '
+              f'neighbors on each side, wrote to {outfile}')
+        return outfile
 
-    @property
-    def mbeds(self):
+    @staticmethod
+    def load_embeddings(infile):
         mbeds = dict()
-        with open(self.mbed_file, 'rb') as f:
+        with open(infile, 'rb') as f:
             mbeds = pickle.load(f)
         return mbeds
+
+    def fetch_df_with_pairwise_distances(self, extend=0, df=False, reduced=True,
+                                         modify='flip', standard_scale=True):
+        if not df:
+            df = self.dataframe_abbrev(reduced=reduced)
+
+        self.read_mbeds(extend=extend)
+        mbeds = self.__mbeds__
+        pdists = dict()
+        pairwise_metrics = ['euclidean', 'cosine', 'manhattan']
+
+        for uniprot_id, d in mbeds.items():
+            wt = d.pop('wt')
+            try:
+                # make sure that even if something goes wrong, we put back the wildtype
+                pdists[uniprot_id] = dict()
+                for variant, ar in d.items():
+                    positions = [int(p[:-1]) - 1 for p in variant.split('_')]
+
+                    # extend to neighbourhood
+                    positions = sorted(set([c for ran in [list(range(
+                        max(0, p - extend), min(len(wt), p + extend + 1)))
+                        for p in positions] for c in ran]))
+
+                    pdists[uniprot_id][variant] = {m: sum(
+                        paired_distances(wt[positions, :], ar, metric=m)) for m in pairwise_metrics}
+            except Exception as ex:
+                print(ex)
+            d['wt'] = wt
+
+        for m in pairwise_metrics:
+            df[m] = df.apply(lambda gdf: pdists.get(
+                gdf.UniProt_ID, dict()).get(gdf.MUTATION, dict()).get(m, 0), axis=1)
+            # standardize
+            me, std = np.mean(df[m]), np.std(df[m])
+            df[m] = df[m].apply(lambda f: (f - me) / std)
+
+        for m in pairwise_metrics:
+            if modify == 'flip':
+                # if the measured change is negative, pretend the distance is negative
+                df[m] = df.apply(lambda gdf: np.sign(gdf[gdf.DELTA]) * pdists.get(
+                    gdf.UniProt_ID, dict()).get(gdf.MUTATION, dict()).get(m, 0), axis=1)
+            else:
+                df[m] = df.apply(lambda gdf: pdists.get(
+                    gdf.UniProt_ID, dict()).get(gdf.MUTATION, dict()).get(m, 0), axis=1)
+            if standard_scale:
+                me, std = np.mean(df[m]), np.std(df[m])
+                df[m] = df[m].apply(lambda f: (f - me) / std)
+
+        df = df.loc[:, self.order + pairwise_metrics].melt(
+            id_vars=self.order, value_vars=pairwise_metrics,
+            var_name='metric', value_name='dist').melt(
+            id_vars=['metric', 'dist'], value_vars=self.order,
+            var_name='delta', value_name='change')
+        df = df[~df.change.isna()].reset_index(drop=True)  # drop all the NaN lines. it's ok why they were there
+
+        if modify == 'abs':
+            df.change = df.change.abs()  # make all changes positive
+        elif modify == 'pos':
+            df = df.loc[df.change > 0]
+        elif modify == 'neg':
+            df = df.loc[df.change < 0]
+
+        df.delta = df.delta.apply(self.order.index)
+        df.metric = df.metric.apply(pairwise_metrics.index)
+        df = df[['delta', 'metric', 'dist', 'change']]  # re-order
+
+        self.__dataframe_pairwise__ = df
+        return mbed_dists(data=df.copy(deep=True), delta_labels=self.order, metric_labels=pairwise_metrics)
