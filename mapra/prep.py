@@ -247,7 +247,16 @@ class dataset:
         return mbeds
 
     def fetch_df_with_pairwise_distances(self, extend=0, df=False, reduced=True,
-                                         modify='flip', standard_scale=True):
+                                         modify=None, scaler=None, func=sum):
+        """
+        :param extend: The number of additional neighbours to include on each side
+        :param df: optional dataframe, otherwise will be dataframe_abbrev(reduced=reduced)
+        :param reduced: if only the redundancy-reduced dataset shall be loaded from the df
+        :param modify: 'flip' distances for negative changes, use the 'abs' value, only 'pos' or 'neg'
+        :param scaler: 'std' or 'minmax'
+        :param func: the function to handle compound mutations: np.mean, sum, max, min
+        :return:
+        """
         if not df:
             df = self.dataframe_abbrev(reduced=reduced)
 
@@ -269,18 +278,11 @@ class dataset:
                         max(0, p - extend), min(len(wt), p + extend + 1)))
                         for p in positions] for c in ran]))
 
-                    pdists[uniprot_id][variant] = {m: sum(
+                    pdists[uniprot_id][variant] = {m: func(
                         paired_distances(wt[positions, :], ar, metric=m)) for m in pairwise_metrics}
             except Exception as ex:
                 print(ex)
             d['wt'] = wt
-
-        for m in pairwise_metrics:
-            df[m] = df.apply(lambda gdf: pdists.get(
-                gdf.UniProt_ID, dict()).get(gdf.MUTATION, dict()).get(m, 0), axis=1)
-            # standardize
-            me, std = np.mean(df[m]), np.std(df[m])
-            df[m] = df[m].apply(lambda f: (f - me) / std)
 
         for m in pairwise_metrics:
             if modify == 'flip':
@@ -290,9 +292,13 @@ class dataset:
             else:
                 df[m] = df.apply(lambda gdf: pdists.get(
                     gdf.UniProt_ID, dict()).get(gdf.MUTATION, dict()).get(m, 0), axis=1)
-            if standard_scale:
+            if scaler == 'std':
                 me, std = np.mean(df[m]), np.std(df[m])
                 df[m] = df[m].apply(lambda f: (f - me) / std)
+            elif scaler == 'minmax':
+                lower, upper = 0, 1
+                mi, ma = min(df[m]), max(df[m])
+                df[m] = df[m].apply(lambda f: (f - mi) / (ma - mi) * (upper - lower) + lower)
 
         df = df.loc[:, self.order + pairwise_metrics].melt(
             id_vars=self.order, value_vars=pairwise_metrics,
