@@ -16,15 +16,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics.pairwise import paired_distances
 
 
-def abbrev(mutation_pattern):
-    return '_'.join(i[1:] for i in mutation_pattern.split(' '))
-
-
-@dataclass
-class mbed_dists:
-    data: pd.DataFrame
-    delta_labels: list
-    metric_labels: list
+def _abbrev(mutation_pattern):
+    return '_'.join(i[1:] for i in mutation_pattern.split(' ') if i)
 
 
 class dataset:
@@ -36,6 +29,7 @@ class dataset:
         sets = [dict(), dict()]  # full_set, reduced_set
         self.__mbeds__ = None
         self.__dataframe_pairwise__ = None
+        self.__library__ = dict()
 
         for fasta in wd.rglob('*.fasta'):
             m = dataset.path_regex.match(fasta.name)
@@ -136,7 +130,7 @@ class dataset:
         df = self.__dataframe__.copy(deep=True)
         if reduced:
             df = df.loc[df.DATASET == 'reduced_set']
-        df.MUTATION = df.MUTATION.apply(abbrev)
+        df.MUTATION = df.MUTATION.apply(_abbrev)
         return df
 
     def dataframe_remerged(self, reduced=False, df=False):
@@ -146,7 +140,7 @@ class dataset:
             df = self.dataframe
             if reduced:
                 df = df.loc[df.DATASET == 'reduced_set']
-            df.MUTATION = df.MUTATION.apply(abbrev)
+            df.MUTATION = df.MUTATION.apply(_abbrev)
 
         # # pandas DataFrame get with multiple conditions including index then assign
         # df.loc[(df.index == mo[path][0]) & (df['gene'] == gene), c2[col]] = new_text
@@ -178,7 +172,7 @@ class dataset:
         df = self.dataframe
         if reduced:
             df = df.loc[df.DATASET == 'reduced_set']
-        df.MUTATION = df.MUTATION.apply(abbrev)
+        df.MUTATION = df.MUTATION.apply(_abbrev)
         return df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).mean().reset_index()
 
     def dataframe_gaussian_avg(self, reduced=False):
@@ -189,7 +183,7 @@ class dataset:
         df = self.dataframe
         if reduced:
             df = df.loc[df.DATASET == 'reduced_set']
-        df.MUTATION = df.MUTATION.apply(abbrev)
+        df.MUTATION = df.MUTATION.apply(_abbrev)
 
         # calculate scaling factors from the pH
         factors = df.pH.apply(norm.pdf, args=(7, 2)) / norm.pdf(7, 7, 2)
@@ -202,13 +196,14 @@ class dataset:
 
         return df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).mean().reset_index()
 
-    def read_mbeds(self, extend=0, h5_file=Path('.').resolve().parent
-                                           / 'all_sequences_prothermdb_HALF.h5'):
+    def _extract_embeds(self, extend=0, h5_file=Path('.').resolve().parent
+                                                / 'all_sequences_prothermdb_HALF.h5'):
         """
-        Reads embeddings from the H5 file to self.mbeds.
+        Extracts embeddings from a H5 file to .pkl file, saves the paths in
+        self.__library__ and returns the dict of embeddings
         :param extend: The number of neighbors on each size; e.g. 8 means a region size of 17
         :param h5_file: the path to the file with embeddings
-        :return: outfile: the path to the pickled extracted embeddings
+        :return: mbeds: the extracted embeddings as a dictionary
         """
         print(f'reading {h5_file} ...')
         mbeds = dict()
@@ -228,25 +223,75 @@ class dataset:
                         for p in positions] for c in ran]))
                     mbeds[uniprot_id][variant] = np.array(f[key])[positions, :]
 
-        self.__mbeds__ = mbeds
-        outfile = h5_file.parent / f'extracted_{extend}.pkl'
-
+        outfile = h5_file.parent / 'pkl' / f'h5_slice_{extend}.pkl'
+        self.__library__[extend] = outfile
         with open(outfile, 'wb') as f:
             pickle.dump(mbeds, f)
 
         print(f'read {sum(len(v) for v in mbeds.values())} embeddings '
               f'for {len(mbeds)} proteins, each SAV with {extend} '
               f'neighbors on each side, wrote to {outfile}')
-        return outfile
-
-    @staticmethod
-    def load_embeddings(infile):
-        mbeds = dict()
-        with open(infile, 'rb') as f:
-            mbeds = pickle.load(f)
         return mbeds
 
-    def fetch_df_with_pairwise_distances(self, extend=0, df=False, reduced=True,
+    def fetch_mbeds(self, extend=0):
+        """
+        Fetch embeddings depending on the number of
+        additional positions each side of a mutation.
+        """
+        # TODO cheating:
+        self.__library__[0] = Path('/home/quirin/PYTHON/mapra/pkl/h5_slice_0.pkl')
+
+        if extend in self.__library__:
+            with open(self.__library__[extend], 'rb') as f:
+                print(f'loading from {self.__library__[extend]}')
+                return pickle.load(f)
+        else:
+            return self._extract_embeds(extend=extend)
+
+    def fetch_numpy_distances(self, df=None, reduced=True):
+        """
+        For a given pandas DataFrame (or the default df with abbreviated mutation patterns),
+        build a numpy array mapping all three metrics of protein stability change to the
+        changes in the embeddings; saving all 1024 dimensions.
+        :param df: a pandas DataFrame, otherwise self.dataframe_abbrev(reduced=reduced)
+        :param reduced: bool, use the redundancy-reduced dataset or not
+        :return:
+        """
+        if df is None:
+            df = self.dataframe_abbrev(reduced=reduced)
+        mbeds = self.fetch_mbeds(0)
+
+        # iterate over the embeddings once, then access the smaller
+        # result multiple times to build an array matching the dataframe
+        npdists = dict()
+        for uniprot_id, d in mbeds.items():
+            wt = d.pop('wt')
+            try:
+                # make sure that even if something goes wrong, we put back the wildtype
+                npdists[uniprot_id] = dict()
+                # the variants already come with their array slices of the right size
+                for variant, ar in d.items():
+                    positions = [int(p[:-1]) - 1 for p in variant.split('_')]
+                    # for each mutated position, subtract the wildtype
+                    # from the variant and add up these rows of differences
+                    npdists[uniprot_id][variant] = np.sum(np.subtract(ar, wt[positions, :]),
+                                                          axis=0, keepdims=True)
+            except Exception as ex:
+                raise RuntimeError(f'Something failed for {uniprot_id}') from ex
+            d['wt'] = wt
+
+        # do some pandas magic and a numpy array pops out
+        npr = np.vstack(df.apply(
+            lambda gdf: np.hstack((  # glue to the left side of the row of differences
+                np.array([[self.order.index(gdf.DELTA),  # which metric was measured
+                           gdf[gdf.DELTA]]], dtype=np.float16),  # and the measured value
+                npdists.get(gdf.UniProt_ID, dict()).get(
+                    gdf.MUTATION, np.zeros((1, 1024), dtype=np.float16))  # fall back to zeroes is needed
+            )), axis=1))
+
+        return npr
+
+    def fetch_df_with_pairwise_distances(self, extend=0, df=None, reduced=True,
                                          modify=None, scaler=None, func=sum):
         """
         :param extend: The number of additional neighbours to include on each side
@@ -257,11 +302,10 @@ class dataset:
         :param func: the function to handle compound mutations: np.mean, sum, max, min
         :return:
         """
-        if not df:
+        if df is None:
             df = self.dataframe_abbrev(reduced=reduced)
+        mbeds = self.fetch_mbeds(extend)
 
-        self.read_mbeds(extend=extend)
-        mbeds = self.__mbeds__
         pdists = dict()
         pairwise_metrics = ['euclidean', 'cosine', 'manhattan']
 
@@ -281,7 +325,7 @@ class dataset:
                     pdists[uniprot_id][variant] = {m: func(
                         paired_distances(wt[positions, :], ar, metric=m)) for m in pairwise_metrics}
             except Exception as ex:
-                print(ex)
+                raise RuntimeError(f'Something failed for {uniprot_id}') from ex
             d['wt'] = wt
 
         for m in pairwise_metrics:
@@ -319,4 +363,11 @@ class dataset:
         df = df[['delta', 'metric', 'dist', 'change']]  # re-order
 
         self.__dataframe_pairwise__ = df
+
+        @dataclass
+        class mbed_dists:
+            data: pd.DataFrame
+            delta_labels: list
+            metric_labels: list
+
         return mbed_dists(data=df.copy(deep=True), delta_labels=self.order, metric_labels=pairwise_metrics)
