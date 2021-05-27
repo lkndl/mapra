@@ -1,0 +1,30 @@
+cosine similarity
+multiply the cosines distances
+Spearman correlation
+histogram over meaningful positions?
+element-wise subtract vectors
+
+or feed both values into an NN and 
+
+
+matthews correlation coefficient
+
+
+
+Lea:
+weighting in kNNs
+for predictors that are complex enough (like NNs, maybe SVMs), using a multi-label appraoch can enable each label to benefit from also predicting the others
+
+
+important + remember:
+throw some non-linearity between linear layers, otherwise you can replace them with a single one
+compare against random, and against assigning most frequent state
+
+
+
+pooling only makes sense at ...
+use zero padding.
+
+
+
+scikit-learn MLP instead of kNN

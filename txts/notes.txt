@@ -1,0 +1,40 @@
+
+
+how do we use git
+reusable, modular code? reproducible analysis / "results" 
+why were the different approaches chosen?
+
+
+amino acid substitution matrix
+
+interactive dotplots
+
+
+
+each transformer layer consists of multiple self-attention heads, and the Feed-forward NN combines them.
+
+which embedding do we use? use only the embedding of the last layer
+
+diff between (LSTM-based) seqvec and lstm
+
+
+logistic regression
+at the end
+
+
+an average protein idea is in each aa.
+
+
+1K seqs = 1GB
+uniprot: maybe twice at much
+
+
+
+
+........... no Machine Learning pipeline
+
+
+
+
+train-test split now.
+cross-validation later, but is supposedly easy with scikit

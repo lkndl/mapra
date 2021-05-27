@@ -1,0 +1,41 @@
+
+
+I had this series of measurements for different pH values last week. For a single protein and a certain set of mutations. more extreme pH, greater stability change. 
+
+logistic regression for every such series, pretend to have all values at pH 7?
+
+compare averaging to single point/ph7
+
+weighted average around pH7?
+
+
+Do you think that specific replacements, meaning a 20x20 matrix, would help us?  --> lead us towards a BLOSUM matrix, or a BLOSUM matrix of the experiments that were selected for ProThermDB
+
+Looking at specific replacements would mean new question: How would we calculate compound effects? And that's really a step back from using embeddings in the first place.
+Then also not leading anywhere: Do more complex patterns re-occur?
+
+
+Three predictors?
+TODO always do four models ... logistic models are commonly for classification ... check if red outliers are extreme pH values
+pick only the row that changes -> row 450 for C450A
+
+
+INFO: MCC matthews correlation coefficient better than ... accu?
+think about mapping all three measurements to one scale, using points where we have more than one measurement.
+INFO: Dagmar logistic + linear regression slides
+Dagmar t-SNEs clusters might be amino acids:
+	reducing 1024 dimensions to two might still mean that the biophysical properties (~amino acid) remains the strongest signal
+
+Do pairwise euclidean distances between embeddings (wild type <> isoform) *correlate* with the measurements: Is there signal there.
+
+
+Having a continuous value distribution lends itself to doing a regression rather than a classification. However, a classification would then be easy, as well. ----> How many classes to map?
+
+
+Naive idea instead of pairwise euclidean distance: Search for increasing component ... PCA? 
+
+
+
+Pairwise euclidian distance is usually bad for high-dimensional data (>1000). Maybe use cosine/manhattan distance or *test different distance functions*
+
+The mutation pattern is just a name tag. We don't actually care what it reads.

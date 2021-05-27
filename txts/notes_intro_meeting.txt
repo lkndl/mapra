@@ -1,0 +1,99 @@
+start when we're done with exams
+
+
+https://docs.google.com/presentation/d/1AcwsmqYN7ShYwWwcQkhsRyhLVIoUVl6PADmhCoNjJDI/edit?usp=sharing 
+
+SOTA = state of the art
+
+use evolutionary infos: MSAs / PSSMs
+
+MMSeqs2 is fastest search today, might not be fast enough for databases, which outgrow Moore's Law
+
+bad performance for shallow MSAs = small families, disordered proteins, regions with low coverage
+
+
+-> nowadays representation learning RL (part of transfer learning) 
+works only with a lot of data and awesome hardware
+
+self-supervised learning: no labels but only the seq itself required
+
+left image: chop off last layer because we're interested in the intermediate representation.
+
+word2vec as a simple example
+cbow: two words to the left and the right, predict the middle word. in our case: get the middle representation, not the final classification label
+skip-gram: given the center word, re-construct the surrounding words.
+
+
+word2vec embeddings are un-contextualized?
+ELMo Embeddings from Language Models
+LSTM long short-term memory
+produce different embeddings for the same word
+
+
+p(t_k | t_1, t_2, t_3, ... , t_k-1)
+predict token k given tokens 1 trough k-1
+
+ELMo SeqVec learn a big DB Unipret50?
+
+single-vector representation of each amino acid (=word) 512forward concat 512 backward.
+1024xlen(seq) matrix model. train predictor on these representations.
+
+
+BERT: all in one model, not two directions
+reconstruct corrupt tokens
+ProtBERT performance is at the same level as Netsurf2 as of 22nd Feb
+UMAP legends are in the wrong order
+
+
+all projects use embeddings as input. now predict different aspects
+1 Michael H: predict how conserved an aa residue is. binding pockets are conserved
+2 Michael H: disorder
+
+3 Maria: stability change upon mutation
+first compare embeddings of wildtype and mutated, maybe will already give us an idea. next a very simple supervised predictor / linear regression
+
+4 Michael B: ProNA2021 speed up prona2020. first database search to make PSSMs (replace that ...)
+which protein does ... bind to.
+per-protein. 
+clustering un- or semi-supervised k-NN
+for new seq: find k nearest neighbors, decide prediction
+
+5 after 4: where are the binding sites. some neural network architecture: feed-forward or CNN. a bit like project 2 disorder. maybe combine 4+5
+
+
+ALL PROJECTS done in the first week of July.
+start end of march or maybe nothing before april or maybe mid-april + meet at end of march
+maybe meet on Tuesdays
+Michael B recommends Python, and PyTorch for deep learning or scikit-learn for simpler classifiers
+bi-weekly meeting with 10min presentation update. always summarize in the google doc 
+discussion with each other
+
+
+LOOK UP TREE INFERENCE FROM EMBEDDINGS
+
+Lea: integrated life science in Erlangen
+RNA-Seq of inflammatory diseases. mice, arthitis and asthma
+Lea abroad end of august
+Dagmar same as Lea + knows C
+also no ML exp.
+both know MatLab!
+Pauline: centrality measures in networks @baumbachlab. C#
+practicum at beginning of April
+Pauline continues her last year's project
+
+
+next two weeks propose ideas to Michael H
+send project pref next few days, then read up until 23 March 14:00 
+read into RL + self-supervised learning
+
+
+
+
+
+
+
+
+
+
+
+
