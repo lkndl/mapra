@@ -1,4 +1,34 @@
-cosine similarity
+
+error margin and number of digits
+for bootstrapping, SE = SD
+
+
+middle of june Prof. Rost
+Thermal stability is an exotic topic, spend one more minute on explaining the topic
+
+re-cap of the project. do not try all you did. the details are not important. if it did not work, drop it. if parameter's are all the same, drop them.
+
+you do not need to introduce T5 embeddings.
+high-level picture of the results.
+
+does not have to be fully-fledged finish. The date is early to allow Prof. Rost to make suggestions.
+only exactly 15min. more discussion is preferred. 
+5-max8 min discussion. max 8 slides, but you can prep backup slides
+
+
+10% for this intermediary and the final talk, report rest 80%
+
+
+MULTIVARIATE
+MAKE IT A REGRESSION TASK AGAIN
+combined with abs
+
+important takeaway: 
+T5 embeddings tend to smear very local information, and very much capture context
+
+
+cosine similarity captures angles ...
+
 multiply the cosines distances
 Spearman correlation
 histogram over meaningful positions?
@@ -13,13 +43,16 @@ matthews correlation coefficient
 
 Lea:
 weighting in kNNs
-for predictors that are complex enough (like NNs, maybe SVMs), using a multi-label appraoch can enable each label to benefit from also predicting the others
+for predictors that are complex enough (like NNs, maybe SVMs), using a multi-label approach can enable each label to benefit from also predicting the others
 
 
 important + remember:
 throw some non-linearity between linear layers, otherwise you can replace them with a single one
 compare against random, and against assigning most frequent state
 
+
+Adam and SGD produce very similar results, but the training in adam should be way faster (faster convergence)
+learning rate is not important for Lea or Dagmar
 
 
 pooling only makes sense at ...
