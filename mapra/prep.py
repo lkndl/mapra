@@ -1,23 +1,27 @@
-import h5py
 import pickle
 import re
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
+import scipy.stats
 from Bio import SeqIO
 from scipy.stats import norm
-from dataclasses import dataclass
-
-from sklearn import linear_model, metrics, preprocessing
-from sklearn.datasets import load_digits
-from sklearn.model_selection import train_test_split
 from sklearn.metrics.pairwise import paired_distances
 
 
 def _abbrev(mutation_pattern):
     return '_'.join(i[1:] for i in mutation_pattern.split(' ') if i)
+
+
+def save(fig, path):
+    """Save a matplotlib or seaborn figure in the plots subdirectory with a given path/name."""
+    wd = Path('.').resolve().parent / 'plots'
+    Path.mkdir((wd / path).parent, parents=True, exist_ok=True)
+    fig.savefig(wd / path, dpi=300, bbox_inches='tight', pad_inches=.1)
 
 
 class dataset:
@@ -115,12 +119,6 @@ class dataset:
             .reset_index().drop(columns='index')
         (wd / 'plots').mkdir(parents=True, exist_ok=True)
         self.distances = dict()
-
-        # TODO i need a background distribution: for example at every kth position?
-        # TODO class balance between training and test set is really important
-        # TODO use a measure that is sensitive for class imbalance, accuracy would fail horribly
-        # TODO linear regression of stab change depending on pH value -> linear equation with error range
-        # MARK how to deal with singleton records where no slope can be inferred? background distr
 
     @property
     def dataframe(self):
@@ -371,3 +369,13 @@ class dataset:
             metric_labels: list
 
         return mbed_dists(data=df.copy(deep=True), delta_labels=self.order, metric_labels=pairwise_metrics)
+
+    def fetch_spearman_rhos(self, npr):
+        spears = dict()
+        for i, delta in enumerate(self.order):
+            # select only matching rows, and ignore the delta column
+            dnpr = npr[npr[:, 0] == i, 1:]
+            spear, pval = scipy.stats.spearmanr(dnpr, axis=0)
+            # only need first line[1:] of output matrix
+            spears[delta] = spear[0, 1:]
+        return spears

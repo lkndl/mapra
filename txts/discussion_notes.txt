@@ -1,4 +1,26 @@
 
+do not use the test set when optimising number of column!!
+
+Dagmar: looking at linear regression coefficients, not correlations
+pick the columns that are outside of the mean +- std window -> 42 columns xD
+me might see something like column 295, but we might also not. 
+
+regression task is in the end more logical than using a random predictor. beating this more primitive model should imply I'm beating random.
+
+!make the regression using pairwise dists on the exact same train:test split!
+
+explain the wildtype - variant, because so far they've been using pairwise dists.
+
+
+Lea's architecture: reflecting the proNA architecture, so say that and give credit. :D
+
+Dagmar: proper references
+Maria: you can't click links in a presentation
+
+class balance between training and test set is really important
+
+# TODO BIS HIER NEU
+
 error margin and number of digits
 for bootstrapping, SE = SD
 
