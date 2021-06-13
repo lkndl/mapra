@@ -49,9 +49,18 @@ class dataset:
 
         tsvs = list(wd.rglob('*.tsv'))
         if len(tsvs) != 1:
-            warnings.warn('found not exactly one TSV with annotations:\n' + '\n'.join(tsvs))
+            warnings.warn('found not exactly one TSV with annotations:\n' + '\n'.join(str(tsv) for tsv in tsvs))
 
-        df = pd.read_csv(tsvs[0], sep='\t')
+        protherm = [tsv for tsv in tsvs if tsv.stem == 'prothermdb_annotations'][0]
+        df = pd.read_csv(protherm, sep='\t')
+
+        # read PDB IDs from the other tsv
+        pdb_ids = [tsv for tsv in tsvs if tsv.stem == 'uniprot_to_pdb'][0]
+        pdb = dict()
+        for row in pd.read_csv(pdb_ids, sep='\t', header=0).itertuples():
+            pdb[row.From] = row.To
+        df['PDB'] = df.UniProt_ID.apply(pdb.get)
+
         # filter out rows with undetermined '-' or 'wild-type' mutation
         len_before = len(df)
         df = df.loc[~df.MUTATION.isin(['-', 'wild-type'])]
@@ -297,7 +306,7 @@ class dataset:
         :param reduced: if only the redundancy-reduced dataset shall be loaded from the df
         :param modify: 'flip' distances for negative changes, use the 'abs' value, only 'pos' or 'neg'
         :param scaler: 'std' or 'minmax'
-        :param func: the function to handle compound mutations: np.mean, sum, max, min
+        :param func: the function to handle compound mutations: np.mean, np.prod, sum, max, min
         :return:
         """
         if df is None:
