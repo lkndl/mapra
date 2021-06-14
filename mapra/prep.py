@@ -246,7 +246,7 @@ class dataset:
         additional positions each side of a mutation.
         """
         # TODO cheating:
-        self.__library__[0] = Path('/home/quirin/PYTHON/mapra/pkl/h5_slice_0.pkl')
+        # self.__library__[0] = Path('/home/quirin/PYTHON/mapra/pkl/h5_slice_0.pkl')
 
         if extend in self.__library__:
             with open(self.__library__[extend], 'rb') as f:
@@ -299,7 +299,7 @@ class dataset:
         return npr
 
     def fetch_df_with_pairwise_distances(self, extend=0, df=None, reduced=True,
-                                         modify=None, scaler=None, func=sum):
+                                         modify=None, scaler=None, func=sum, epsilon=0):
         """
         :param extend: The number of additional neighbours to include on each side
         :param df: optional dataframe, otherwise will be dataframe_abbrev(reduced=reduced)
@@ -307,6 +307,7 @@ class dataset:
         :param modify: 'flip' distances for negative changes, use the 'abs' value, only 'pos' or 'neg'
         :param scaler: 'std' or 'minmax'
         :param func: the function to handle compound mutations: np.mean, np.prod, sum, max, min
+        :param epsilon: a constant that will be added to allow meaningful products
         :return:
         """
         if df is None:
@@ -329,7 +330,7 @@ class dataset:
                         max(0, p - extend), min(len(wt), p + extend + 1)))
                         for p in positions] for c in ran]))
 
-                    pdists[uniprot_id][variant] = {m: func(
+                    pdists[uniprot_id][variant] = {m: func(epsilon +
                         paired_distances(wt[positions, :], ar, metric=m)) for m in pairwise_metrics}
             except Exception as ex:
                 raise RuntimeError(f'Something failed for {uniprot_id}') from ex

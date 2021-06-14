@@ -19,8 +19,6 @@ Maria: you can't click links in a presentation
 
 class balance between training and test set is really important
 
-# TODO BIS HIER NEU
-
 error margin and number of digits
 for bootstrapping, SE = SD
 
