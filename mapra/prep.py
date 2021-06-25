@@ -61,6 +61,16 @@ class dataset:
             pdb[row.From] = row.To
         df['PDB'] = df.UniProt_ID.apply(pdb.get)
 
+        # # replace pH column with ∆pH using other tsv with average wildtype pH values
+        # pH_tsv = [tsv for tsv in tsvs if tsv.stem == 'wildtype_pHs'][0]
+        # pHs = dict()
+        # for row in pd.read_csv(pH_tsv, sep='\t', header=0).itertuples():
+        #     pHs[row.wildtype] = row.pH
+        # df['wildtype_pH'] = df.UniProt_ID.apply(pHs.get)
+        # df['delta_pH'] = df.pH - df.wildtype_pH
+        # # df.update(df['delta_pH'].fillna(0))
+        # # df = df.drop(columns=['pH', 'wildtype_pH'])
+
         # filter out rows with undetermined '-' or 'wild-type' mutation
         len_before = len(df)
         df = df.loc[~df.MUTATION.isin(['-', 'wild-type'])]
@@ -157,7 +167,7 @@ class dataset:
                 gdf[m] = gdf[m].sum(skipna=True)
             return gdf.iloc[0]
 
-        df = df.groupby(['UniProt_ID', 'MUTATION', 'pH']) \
+        df = df.groupby(['UniProt_ID', 'MUTATION', 'delta_pH']) \
             .apply(remerge_records).reset_index(drop=True)
 
         # drop all rows that do not have at least two values
@@ -193,7 +203,7 @@ class dataset:
         df.MUTATION = df.MUTATION.apply(_abbrev)
 
         # calculate scaling factors from the pH
-        factors = df.pH.apply(norm.pdf, args=(7, 2)) / norm.pdf(7, 7, 2)
+        factors = df.delta_pH.apply(norm.pdf, args=(7, 2)) / norm.pdf(7, 7, 2)
         factors.fillna(1, inplace=True)
 
         # scale all three measurements
@@ -255,13 +265,14 @@ class dataset:
         else:
             return self._extract_embeds(extend=extend)
 
-    def fetch_numpy_distances(self, df=None, reduced=True):
+    def fetch_numpy_distances(self, df=None, reduced=True, pH=False):
         """
         For a given pandas DataFrame (or the default df with abbreviated mutation patterns),
         build a numpy array mapping all three metrics of protein stability change to the
         changes in the embeddings; saving all 1024 dimensions.
         :param df: a pandas DataFrame, otherwise self.dataframe_abbrev(reduced=reduced)
         :param reduced: bool, use the redundancy-reduced dataset or not
+        :param pH: keep the ∆pH column in there as a feature
         :return:
         """
         if df is None:
@@ -291,10 +302,13 @@ class dataset:
         npr = np.vstack(df.apply(
             lambda gdf: np.hstack((  # glue to the left side of the row of differences
                 np.array([[self.order.index(gdf.DELTA),  # which metric was measured
-                           gdf[gdf.DELTA]]], dtype=np.float16),  # and the measured value
+                           gdf[gdf.DELTA],  # the measured value
+                           gdf.pH, gdf.wildtype_pH, gdf.delta_pH]], dtype=np.float16),  # and the pH values
                 npdists.get(gdf.UniProt_ID, dict()).get(
                     gdf.MUTATION, np.zeros((1, 1024), dtype=np.float16))  # fall back to zeroes is needed
             )), axis=1))
+        if not pH:
+            npr = np.delete(npr, [2, 3, 4], axis=1)
 
         return npr
 
@@ -330,8 +344,9 @@ class dataset:
                         max(0, p - extend), min(len(wt), p + extend + 1)))
                         for p in positions] for c in ran]))
 
-                    pdists[uniprot_id][variant] = {m: func(epsilon +
-                        paired_distances(wt[positions, :], ar, metric=m)) for m in pairwise_metrics}
+                    pdists[uniprot_id][variant] = {m: func(
+                        epsilon + paired_distances(wt[positions, :],
+                                                   ar, metric=m)) for m in pairwise_metrics}
             except Exception as ex:
                 raise RuntimeError(f'Something failed for {uniprot_id}') from ex
             d['wt'] = wt
@@ -357,7 +372,8 @@ class dataset:
             var_name='metric', value_name='dist').melt(
             id_vars=['metric', 'dist'], value_vars=self.order,
             var_name='delta', value_name='change')
-        df = df[~df.change.isna()].reset_index(drop=True)  # drop all the NaN lines. it's ok why they were there
+        df = df[~df.change.isna()].reset_index(drop=True)
+        # drop all the NaN lines. it's ok why they were there
 
         if modify == 'abs':
             df.change = df.change.abs()  # make all changes positive
