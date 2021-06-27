@@ -167,7 +167,7 @@ class dataset:
                 gdf[m] = gdf[m].sum(skipna=True)
             return gdf.iloc[0]
 
-        df = df.groupby(['UniProt_ID', 'MUTATION', 'delta_pH']) \
+        df = df.groupby(['UniProt_ID', 'MUTATION', 'pH']) \
             .apply(remerge_records).reset_index(drop=True)
 
         # drop all rows that do not have at least two values
@@ -203,7 +203,7 @@ class dataset:
         df.MUTATION = df.MUTATION.apply(_abbrev)
 
         # calculate scaling factors from the pH
-        factors = df.delta_pH.apply(norm.pdf, args=(7, 2)) / norm.pdf(7, 7, 2)
+        factors = df.pH.apply(norm.pdf, args=(7, 2)) / norm.pdf(7, 7, 2)
         factors.fillna(1, inplace=True)
 
         # scale all three measurements
@@ -265,14 +265,13 @@ class dataset:
         else:
             return self._extract_embeds(extend=extend)
 
-    def fetch_numpy_distances(self, df=None, reduced=True, pH=False):
+    def fetch_numpy_distances(self, df=None, reduced=True):
         """
         For a given pandas DataFrame (or the default df with abbreviated mutation patterns),
         build a numpy array mapping all three metrics of protein stability change to the
         changes in the embeddings; saving all 1024 dimensions.
         :param df: a pandas DataFrame, otherwise self.dataframe_abbrev(reduced=reduced)
         :param reduced: bool, use the redundancy-reduced dataset or not
-        :param pH: keep the ∆pH column in there as a feature
         :return:
         """
         if df is None:
@@ -302,13 +301,10 @@ class dataset:
         npr = np.vstack(df.apply(
             lambda gdf: np.hstack((  # glue to the left side of the row of differences
                 np.array([[self.order.index(gdf.DELTA),  # which metric was measured
-                           gdf[gdf.DELTA],  # the measured value
-                           gdf.pH, gdf.wildtype_pH, gdf.delta_pH]], dtype=np.float16),  # and the pH values
+                           gdf[gdf.DELTA]]], dtype=np.float16),  # and the measured value
                 npdists.get(gdf.UniProt_ID, dict()).get(
                     gdf.MUTATION, np.zeros((1, 1024), dtype=np.float16))  # fall back to zeroes is needed
             )), axis=1))
-        if not pH:
-            npr = np.delete(npr, [2, 3, 4], axis=1)
 
         return npr
 
