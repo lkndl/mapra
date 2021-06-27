@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import pickle
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from sklearn import linear_model
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
-from mapra import prep
+import prep
 
 WD = Path(__file__).resolve().parents[1]  # this is supposed to mean 'working directory'
 (WD / 'txts').mkdir(parents=True, exist_ok=True)
@@ -26,7 +27,7 @@ rng = np.random.default_rng(12345)
 
 
 def make_splits(npr, seed=rng.integers(low=0, high=1000, size=1)[0]):
-    print(f'split seed {seed}')
+    # print(f'split seed {seed}')
     # create validation sets
     splits = dict()
     test_size = .2
@@ -45,15 +46,15 @@ def make_splits(npr, seed=rng.integers(low=0, high=1000, size=1)[0]):
 def dodo(splits, seed=rng.integers(low=0, high=1000, size=1)[0]):
     relative_dataset_sizes = [1]
     rng.shuffle(relative_dataset_sizes)
-    print(f'train seed {seed}')
+    # print(f'train seed {seed}')
 
-    models = list()
+    all_coefs = list()
     all_spears = list()
 
     results = np.zeros((len(relative_dataset_sizes) * 3, 9))
     for row, set_size in enumerate(relative_dataset_sizes):
         for i, delta in enumerate(delta_labels):
-            print(f'{row} {i} {delta} ', end='')
+            print(f'{seed} {row} {i} {delta} ', end='')
 
             X, X_test, y, y_true = splits[delta]
 
@@ -88,27 +89,27 @@ def dodo(splits, seed=rng.integers(low=0, high=1000, size=1)[0]):
 
             results[row * 3 + i, :] = i, abs_set_size, n_cols, rmse, sp, pval, regr.alpha_, r2, pcorr
             all_spears.append(spears)
-            models.append(regr)
+            all_coefs.append(regr.coef_)
 
     # np.save(str(WD / 'txts' / f'{seed}_fresh.npy'), results)
     return results, models, all_spears
 
 
 results = list()
-all_models = dict()
+all_coefs = dict()
 all_spears = dict()
 for seed in range(1000):
     splits = make_splits(npr.copy(), seed)
     result, models, spears = dodo(splits, seed)
     results.append(result)
     ar = np.vstack(results)
-    all_models[seed] = models
+    all_coefs[seed] = models
     all_spears[seed] = spears
 
     if not seed % 10 or seed == 999:
         np.save(str(WD / 'txts' / f'{seed // 100}.npy'), ar)
-        with open(WD / 'txts' / f'all_models_{seed // 100}.pkl', 'wb') as file:
-            pickle.dump(all_models, file)
+        with open(WD / 'txts' / f'all_coefs_{seed // 100}.pkl', 'wb') as file:
+            pickle.dump(all_coefs, file)
         with open(WD / 'txts' / f'all_spears_{seed // 100}.pkl', 'wb') as file:
             pickle.dump(all_spears, file)
 
