@@ -92,7 +92,7 @@ def dodo(splits, seed=rng.integers(low=0, high=1000, size=1)[0]):
             all_coefs.append(regr.coef_)
 
     # np.save(str(WD / 'txts' / f'{seed}_fresh.npy'), results)
-    return results, models, all_spears
+    return results, all_coefs, all_spears
 
 
 results = list()
@@ -100,10 +100,10 @@ all_coefs = dict()
 all_spears = dict()
 for seed in range(1000):
     splits = make_splits(npr.copy(), seed)
-    result, models, spears = dodo(splits, seed)
+    result, coefs, spears = dodo(splits, seed)
     results.append(result)
     ar = np.vstack(results)
-    all_coefs[seed] = models
+    all_coefs[seed] = coefs
     all_spears[seed] = spears
 
     if not seed % 10 or seed == 999:
