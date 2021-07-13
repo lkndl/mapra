@@ -17,7 +17,6 @@ WD = Path(__file__).resolve().parents[1]  # this is supposed to mean 'working di
 (WD / 'txts').mkdir(parents=True, exist_ok=True)
 
 sns.set_theme(style='white')
-rng = np.random.default_rng(12345)
 
 data = prep.dataset(WD)
 npr = data.fetch_numpy_distances()
@@ -44,7 +43,7 @@ def make_splits(npr, seed=rng.integers(low=0, high=1000, size=1)[0]):
 
 
 def dodo(splits, seed=rng.integers(low=0, high=1000, size=1)[0]):
-    relative_dataset_sizes = [1]
+    relative_dataset_sizes = [.5]
     rng.shuffle(relative_dataset_sizes)
     # print(f'train seed {seed}')
 
@@ -112,5 +111,3 @@ for seed in range(1000):
             pickle.dump(all_coefs, file)
         with open(WD / 'txts' / f'all_spears_{seed // 100}.pkl', 'wb') as file:
             pickle.dump(all_spears, file)
-
-results = [dodo(make_splits(npr.copy(), seed), seed) for seed in range(1000)]
