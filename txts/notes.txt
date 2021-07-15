@@ -1,3 +1,5 @@
+Literature and documentation say that Lasso LARS iteratively adds the feature(s) with highest correlation, but that is not the same as selecting n best-correlating features without iterative refining.
+My initial idea for that was to repeatedly draw subsets of a certain size from our data, train a Lasso LARS regression on that and later compare the selected features and spearman correlation ranks
 
 
 how do we use git
