@@ -11,7 +11,7 @@ from sklearn import linear_model
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
-import prep
+from mapra import prep
 
 WD = Path(__file__).resolve().parents[1]  # this is supposed to mean 'working directory'
 (WD / 'txts').mkdir(parents=True, exist_ok=True)
