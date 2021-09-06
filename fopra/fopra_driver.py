@@ -33,7 +33,7 @@ def train_predictors(splits, random_state=None):
     local_rng = np.random.default_rng(random_state)
 
     # train from subsets of different sizes
-    relative_dataset_sizes = np.arange(.05, 1.01, .05)  # .05)
+    relative_dataset_sizes = np.arange(.05, 1.01, .5)  # .05)
     # shuffle so runtime will statistically not be changed by other jobs
     local_rng.shuffle(relative_dataset_sizes)
 
@@ -112,6 +112,7 @@ def train_predictors(splits, random_state=None):
 
 
 seeds = [0, 1, 2, 3, 4, 5, 6, 1024, 1025, 1026, 1027, 1028, 1029]
+seeds = [0, 1, 2]
 
 if __name__ == '__main__':
     data = prep.dataset(WD)
