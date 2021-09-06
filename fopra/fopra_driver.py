@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 
+import sys
 from pathlib import Path
 
-import numpy as np, pickle
+import numpy as np
 import scipy.stats
 import seaborn as sns
 from numpy.random import default_rng
 from sklearn import linear_model
 from sklearn.metrics import mean_squared_error, r2_score
+
+sys.path.append(str(Path('.').resolve().parent))
 
 from mapra import prep
 
@@ -30,11 +33,11 @@ def train_predictors(splits, random_state=None):
     local_rng = np.random.default_rng(random_state)
 
     # train from subsets of different sizes
-    relative_dataset_sizes = np.arange(.05, 1.01, .5)  # .05)
+    relative_dataset_sizes = np.arange(.05, 1.01, .05)  # .05)
     # shuffle so runtime will statistically not be changed by other jobs
     local_rng.shuffle(relative_dataset_sizes)
 
-    results = np.zeros((len(relative_dataset_sizes) * 3 * 4, 13))
+    results = np.zeros((len(relative_dataset_sizes) * 3 * 4, 14))
 
     for row, set_size in enumerate(relative_dataset_sizes):
         for i, (delta, split) in enumerate(splits.items()):
@@ -103,7 +106,7 @@ def train_predictors(splits, random_state=None):
                 print(f'line: {line_idx}')
                 results[line_idx, :] = \
                     i, abs_set_size, n_cols, rmse, sp, pval, alpha, r2, pcorr, \
-                    seed, mode, split.real_test_size, split.records_test_size
+                    seed, mode, set_size, split.real_test_size, split.records_test_size
 
     return results
 
