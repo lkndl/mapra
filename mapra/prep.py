@@ -311,7 +311,7 @@ class dataset:
                     gdf.MUTATION, np.zeros((1, 1024), dtype=np.float16))  # fall back to zeroes is needed
             )), axis=1))
 
-        if not test_sets:
+        if not sum(len(k) for k in test_sets.values()):
             return npr[:, 1:]  # cut off the train/test column
         return npr
 

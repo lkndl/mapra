@@ -1,3 +1,27 @@
+BLOSUM score verwenden oder baseline aus cagi5 (also die labels hinkriegen, wie gut ich abgeschnitten hätte. um ein gefühl dafür zu kriegen, wie es da im vergleich wäre).
+1 gibt es eine schlagbare baseline mit der wir vergleichen können, die nicht auf embeddings basiert
+2 größeres training set; und auch jetzt schon ein test set fixieren
+3 wie waren die CAGI5 ergebnisse, evaluieren mit einer früheren -> cagi5-frataxin-core.parquet
+
+split train and test along UniProt IDs - done WITH APPROXIMATE SOLUTION and LOOKS REALLY BAD
+evaluate on cv-set? - NO THAT'S OK WE TALKED ABOUT IT
+make a comparative run for naive multivariate linreg, lassolarscv, lassolarsic and lassolars? - done AND LASSOLARSIC LOOKS BETTER
+make another test from randomly selected records - CORRELATIONS ARE A LOT BETTER DUE TO PREVIOUSLY SEEN PROTEINS, and repeats are beneficial now.
+check if dataframe_repeats_avg is consistently better - WORSE FOR NON-UNIPROT SPLIT BECAUSE IT'S MORE LIKELY TO HAVE A VARIANT IN THE TEST SET, BETTER FOR UNIPROT-AWARE SPLIT
+
+1 evaluation set for direct comparison against ELASPIC2
+2 what do we need to compete in CAGI6 -> making the right predictions
+The way I think the CaM challenge is supposed to go: Predict the structure of the variants (supposedly easy), then predict a thermal denaturation profile. "Read off" melting temperature and % unfold.
+3 get more training data. go-to-approach: take whatever we have, train one predictor
+
+on feature selection:
+are we seeing feature selection *instability* or encoding of info? -> probably + hopefully feature selection.
+check if the correlation between the metrics (and potentially feature selection) is consistent across datasets -> shows that this is not ProThermDB (or method) error
+
+having multiple different features allows us to capture many different aspects. Then extract features for different tasks in a meaningful way. This complexity justifies having 1024 dimensions! Not all of them are relevant for me, and that's ok. Many of them are informative, "ask the right question".
+discuss CAGI with Prof. Rost, sometimes can't publish before results are out
+a female colleague is also working on sth like this. Michael H / Celine/Kyra. Might be co-supervisor with Maria, who will be on break sometime.
+CAGI6 or publication as FoPra result, but Prof. Rost decides when that is finished; formally no final document needed. Extend to MSc or then move to binding affinities / sth else entirely?
 
 do not use the test set when optimising number of column!!
 
