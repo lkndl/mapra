@@ -3,6 +3,7 @@ import re
 import warnings
 import dataclasses
 from pathlib import Path
+from collections.abc import Iterable
 
 import h5py
 import numpy as np
@@ -13,10 +14,6 @@ from scipy.stats import norm
 from sklearn.metrics.pairwise import paired_distances
 
 
-def _abbrev(mutation_pattern):
-    return '_'.join(i[1:] for i in mutation_pattern.split(' ') if i)
-
-
 def save(fig, path):
     """Save a matplotlib or seaborn figure in the plots subdirectory with a given path/name."""
     wd = Path('.').resolve().parent / 'plots'
@@ -25,19 +22,251 @@ def save(fig, path):
 
 
 class dataset:
+
+    def __init__(self):
+        self.__mbeds__ = None
+        self.__library__ = dict()
+        self.__rng__ = np.random.default_rng(12345)
+        self.__dataframe__ = pd.DataFrame()
+        self.order = list()
+        # MARK cheating:
+        self.__library__[0] = Path('/home/quirin/PYTHON/mapra/pkl/h5_slice_0_elaspic.pkl')
+
+    @staticmethod
+    def _abbrev(mutation_pattern):
+        return '_'.join(i[1:] for i in mutation_pattern.split(' ') if i)
+
+    def _extract_embeds(self, extend=0, suffix='protherm',
+                        h5_file=Path('.').resolve().parent
+                                / 'all_sequences_prothermdb_HALF.h5'):
+        """
+        Extracts embeddings from a H5 file to .pkl file, saves the paths in
+        self.__library__ and returns the dict of embeddings
+        :param extend: The number of neighbors on each size; e.g. 8 means a region size of 17
+        :param suffix: the filename suffix indicating whether this is a protherm or elaspic dataset
+        :param h5_file: the path to the file with embeddings
+        :return: mbeds: the extracted embeddings as a dictionary
+        """
+        print(f'reading {h5_file} ...')
+        mbeds = dict()
+        with h5py.File(h5_file, 'r') as f:
+            for key, mbed in f.items():
+                if suffix == 'protherm':
+                    pieces = key.split('_')
+                    uniprot_id, variant = pieces[0], '_'.join(pieces[1:]) if len(pieces) > 1 else 'wt'
+                else:
+                    pieces = mbed.attrs['original_id'].split('_')
+                    variant = 'wt' if pieces[-1].isnumeric() else pieces.pop(-1)[1:]
+                    uniprot_id = '_'.join(pieces[:-1])
+                if uniprot_id not in mbeds:
+                    mbeds[uniprot_id] = dict()
+                if variant == 'wt':
+                    mbeds[uniprot_id][variant] = np.array(mbed)
+                else:
+                    if suffix == 'protherm':
+                        positions = [int(p[:-1]) - 1 for p in pieces[1:]]
+                    else:
+                        positions = [int(variant[:-1]) - 1]
+                    # extend to neighbourhood
+                    positions = sorted(set([c for ran in [list(range(
+                        max(0, p - extend), min(len(mbed), p + extend + 1)))
+                        for p in positions] for c in ran]))
+                    mbeds[uniprot_id][variant] = np.array(mbed)[positions, :]
+
+        outfile = h5_file.parent / 'pkl' / f'h5_slice_{extend}_{suffix}.pkl'
+        self.__library__[extend] = outfile
+        with open(outfile, 'wb') as f:
+            pickle.dump(mbeds, f)
+
+        print(f'read {sum(len(v) for v in mbeds.values())} embeddings '
+              f'for {len(mbeds)} proteins, each SAV with {extend} '
+              f'neighbors on each side, wrote to {outfile}')
+        return mbeds
+
+    def _fetch_mbeds(self, extend=0):
+        """
+        Fetch embeddings depending on the number of
+        additional positions each side of a mutation.
+
+        :param extend:
+        :return:
+        """
+        if extend in self.__library__:
+            with open(self.__library__[extend], 'rb') as f:
+                print(f'loading from {f.name}')
+                return pickle.load(f)
+        else:
+            return self._extract_embeds(extend=extend)
+
+    @property
+    def dataframe(self):
+        return self.__dataframe__.copy(deep=True)
+
+    def dataframe_abbrev(self, selector=dict()):
+        """
+        Fetch a copy of the dataset dataframe, optionally filtered
+        for entries that match the specifications in the passed dict.
+
+        :param selector:
+        :return:
+        """
+        df = self.__dataframe__.copy(deep=True)
+        for k, v in selector.items():
+            if not isinstance(v, str) and isinstance(v, Iterable):
+                # allow complex filtering with alternative values, but not for strings (they are Iterables!)
+                df = df.loc[df[k].isin(v)]
+            elif k in df.columns:
+                df = df.loc[df[k] == v]
+        df.MUTATION = df.MUTATION.apply(self._abbrev)
+        return df
+
+    def fetch_spearman_rhos(self, npr):
+        spears = dict()
+        for i, delta in enumerate(self.order):
+            # select only matching rows, and ignore the delta column
+            dnpr = npr[npr[:, 0] == i, 1:]
+            spear, pval = scipy.stats.spearmanr(dnpr, axis=0)
+            # only need first line[1:] of output matrix
+            spears[delta] = spear[0, 1:]
+        return spears
+
+    def fetch_numpy_distances(self, df=None, selector=dict(), test_sets=None):
+        """
+        For a given pandas DataFrame (or the default df with abbreviated mutation patterns),
+        build a numpy array mapping all three metrics of protein stability change to the
+        changes in the embeddings; saving all 1024 dimensions.
+        :param df: a ProThermDB pandas DataFrame, otherwise self.dataframe_abbrev(filter)
+        :param selector: a filter dict, usually indicating use of the redundancy-reduced dataset {'DATASET': 'reduced_set'}
+        :param test_sets: if a list is passed, the additional new first column is 0 for train rows and 1 for test rows
+        :return:
+        """
+        if test_sets is None:
+            test_sets = {delta: list() for delta in self.order}  # make an empty dummy so lookup works
+        if df is None:
+            df = self.dataframe_abbrev(selector)
+        mbeds = self._fetch_mbeds(0)
+
+        # iterate over the embeddings once, then access the smaller
+        # result multiple times to build an array matching the dataframe
+        npdists = dict()
+        for uniprot_id, d in mbeds.items():
+            wt = d.pop('wt')
+            try:
+                # make sure that even if something goes wrong, we put back the wildtype
+                npdists[uniprot_id] = dict()
+                # the variants already come with their array slices of the right size
+                for variant, ar in d.items():
+                    positions = [int(p[:-1]) - 1 for p in variant.split('_')]
+                    # for each mutated position, either keep both embedding vectors or subtract the wildtype
+                    res = np.hstack((ar, wt[positions, :])) if 2048 in selector else np.subtract(ar, wt[positions, :])
+                    # then add up these rows of differences
+                    npdists[uniprot_id][variant] = np.sum(res, axis=0, keepdims=True)
+
+            except Exception as ex:
+                raise RuntimeError(f'Something failed for {uniprot_id}') from ex
+            d['wt'] = wt
+
+        # do some pandas magic and a numpy array pops out
+        npr = np.vstack(df.apply(
+            lambda gdf: np.hstack((  # glue to the left side of the row of differences
+                np.array([[int(gdf.UniProt_ID in test_sets[gdf.DELTA]),  # 0/1 if the row belongs to this train/test set
+                           self.order.index(gdf.DELTA),  # which metric was measured
+                           gdf[gdf.DELTA]]], dtype=np.float16),  # and the measured value
+                npdists.get(gdf.UniProt_ID, dict()).get(
+                    gdf.MUTATION, np.zeros_like(res, dtype=np.float16))  # fall back to zeroes is needed
+            )), axis=1))
+
+        if not sum(len(k) for k in test_sets.values()):
+            return npr[:, 1:]  # cut off the train/test column
+        return npr
+
+    def uniprot_train_test_split(self, df=None, selector=dict(), test_size=.2, random_state=None):
+        """
+        Splits a ProThermDB dataset into a training and final testing set along
+        UniProt IDs using a given target test size that will be approximately true.
+
+        :param df: a ProThermDB pandas DataFrame, otherwise self.dataframe_abbrev(filter)
+        :param selector: a filter dict, usually indicating use of the redundancy-reduced dataset {'DATASET': 'reduced_set'}
+        :param test_size: the target test size, will only be approximately true
+        :param random_state: seed that determines the random selection of the test set
+        :return: Return a dict with delta labels as keys containing a dataclass
+        instance similar to sklearn.model_selection.train_test_split.
+        """
+        assert 0 < test_size < 1, 'invalid test size, must be 0 < test_size < 1'
+
+        if df is None:
+            df = self.dataframe_abbrev(selector)
+        if random_state is None:
+            random_state = self.__rng__.integers(low=0, high=1000, size=1)[0]
+        local_rng = np.random.default_rng(random_state)
+
+        @dataclasses.dataclass
+        class Split:
+            delta: str
+            X: np.array = None
+            X_test: np.array = None
+            y: np.array = None
+            y_true: np.array = None
+            test_set: set = None
+            real_test_size: float = None
+            records_test_size: float = None
+
+        splits = dict()
+        test_sets = dict()
+        for i, delta in enumerate(self.order):
+            # get ids for this metric as a sorted list
+            uniprot_ids = sorted(set(df.loc[df.DELTA == delta, 'UniProt_ID']))
+            # calculate how many distinct UniProt IDs will be in the test set
+            abs_test_size = int(np.ceil(len(uniprot_ids) * test_size))
+            assert abs_test_size < len(uniprot_ids), 'no training data left, set smaller test size'
+            # shuffle the sorted list of all UniProt IDs
+            local_rng.shuffle(uniprot_ids)
+            # use leading entries as test set
+            test_set = uniprot_ids[:abs_test_size]
+            # save for fetch_numpy_distances
+            test_sets[delta] = test_set
+            # make and pre-fill the Split dataclass instance
+            splits[delta] = Split(delta=delta, test_set=set(test_set),
+                                  real_test_size=len(test_set) / len(uniprot_ids))
+
+        # get embedding changes
+        npr = self.fetch_numpy_distances(df=df, selector=selector, test_sets=test_sets)
+        train_filter = npr[:, 0] == 0  # TODO what is this again?
+        train_npr, test_npr = npr[train_filter, 1:], npr[~train_filter, 1:]
+
+        def get_features_and_labels_for_delta(ar, i):
+            # select the rows for this delta, and cleave off the delta column
+            dar = ar[ar[:, 0] == i, 1:]
+            # split into features and labels
+            return dar[:, 1:], dar[:, 0].reshape(-1, 1)
+
+        # records_test_sizes = dict()
+        for i, delta in enumerate(self.order):
+            s = splits[delta]
+            s.X, s.y = get_features_and_labels_for_delta(train_npr, i)
+            s.X_test, s.y_true = get_features_and_labels_for_delta(test_npr, i)
+            s.records_test_size = len(s.y_true) / (len(s.y) + len(s.y_true))
+
+        pp = lambda it: ':'.join('%.4f' % elem.__getattribute__(it) for elem in splits.values())
+        print(f'split {random_state} targeted {test_size}, '
+              f'real test sizes: {pp("real_test_size")}, record test sizes: {pp("records_test_size")}')
+        return splits
+
+
+class protherm_dataset(dataset):
     path_regex = re.compile(r'.*?_prothermdb_(?P<measurement>.+?)(?:(?:_)?(?P<dataset>rep_seq|a?)?\.fasta|\.tsv)')
     mutation_regex = re.compile(r'( ?(?:\S+:)?[ARNDCQEGHILKMFPSTWYV]\d{1,9}[ARNDCQEGHILKMFPSTWYV] ?)+')
 
     def __init__(self, wd=Path('.').resolve().parent, legacy=False):
+        super().__init__()
         print(wd)
         sets = [dict(), dict()]  # full_set, reduced_set
-        self.__mbeds__ = None
         self.__dataframe_pairwise__ = None
-        self.__library__ = dict()
-        self.__rng__ = np.random.default_rng(12345)
+        # MARK cheating:
+        self.__library__[0] = Path('/home/quirin/PYTHON/mapra/pkl/h5_slice_0_protherm.pkl')
 
         for fasta in wd.rglob('*.fasta'):
-            m = dataset.path_regex.match(fasta.name)
+            m = protherm_dataset.path_regex.match(fasta.name)
             if not m:
                 warnings.warn('unexpected FASTA filename: ' + str(fasta), RuntimeWarning)
                 continue
@@ -116,7 +345,6 @@ class dataset:
         #     return gdf
         # df = df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).apply(get_repeats_and_std)
         # MARK use transform('count') to create a new column and count() otherwise
-        # TODO this ignores the pH - that's not real repeats
         df['REPEATS'] = df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).transform('count')['LENGTH']
 
         self.order = ['dtemp', 'ddg', 'h2o']
@@ -140,17 +368,6 @@ class dataset:
         (wd / 'plots').mkdir(parents=True, exist_ok=True)
         self.distances = dict()
 
-    @property
-    def dataframe(self):
-        return self.__dataframe__.copy(deep=True)
-
-    def dataframe_abbrev(self, reduced=False):
-        df = self.__dataframe__.copy(deep=True)
-        if reduced:
-            df = df.loc[df.DATASET == 'reduced_set']
-        df.MUTATION = df.MUTATION.apply(_abbrev)
-        return df
-
     def dataframe_remerged(self, reduced=False, df=False):
         """Re-merge separate repeat records for different DELTAs but measured at identical pH"""
         if type(df) != pd.DataFrame:
@@ -158,7 +375,7 @@ class dataset:
             df = self.dataframe
             if reduced:
                 df = df.loc[df.DATASET == 'reduced_set']
-            df.MUTATION = df.MUTATION.apply(_abbrev)
+            df.MUTATION = df.MUTATION.apply(self._abbrev)
 
         # # pandas DataFrame get with multiple conditions including index then assign
         # df.loc[(df.index == mo[path][0]) & (df['gene'] == gene), c2[col]] = new_text
@@ -190,7 +407,7 @@ class dataset:
         df = self.dataframe
         if reduced:
             df = df.loc[df.DATASET == 'reduced_set']
-        df.MUTATION = df.MUTATION.apply(_abbrev)
+        df.MUTATION = df.MUTATION.apply(self._abbrev)
         return df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).mean().reset_index()
 
     def dataframe_gaussian_avg(self, reduced=False):
@@ -201,7 +418,7 @@ class dataset:
         df = self.dataframe
         if reduced:
             df = df.loc[df.DATASET == 'reduced_set']
-        df.MUTATION = df.MUTATION.apply(_abbrev)
+        df.MUTATION = df.MUTATION.apply(self._abbrev)
 
         # calculate scaling factors from the pH
         factors = df.pH.apply(norm.pdf, args=(7, 2)) / norm.pdf(7, 7, 2)
@@ -214,113 +431,12 @@ class dataset:
 
         return df.groupby(['UniProt_ID', 'MUTATION', 'DELTA']).mean().reset_index()
 
-    def _extract_embeds(self, extend=0, h5_file=Path('.').resolve().parent
-                                                / 'all_sequences_prothermdb_HALF.h5'):
-        """
-        Extracts embeddings from a H5 file to .pkl file, saves the paths in
-        self.__library__ and returns the dict of embeddings
-        :param extend: The number of neighbors on each size; e.g. 8 means a region size of 17
-        :param h5_file: the path to the file with embeddings
-        :return: mbeds: the extracted embeddings as a dictionary
-        """
-        print(f'reading {h5_file} ...')
-        mbeds = dict()
-        with h5py.File(h5_file, 'r') as f:
-            for i, key in enumerate(f.keys()):
-                pieces = key.split('_')
-                uniprot_id, variant = pieces[0], '_'.join(pieces[1:])
-                if uniprot_id not in mbeds:
-                    mbeds[uniprot_id] = dict()
-                if not variant:
-                    mbeds[uniprot_id]['wt'] = np.array(f[key])
-                else:
-                    positions = [int(p[:-1]) - 1 for p in pieces[1:]]
-                    # extend to neighbourhood
-                    positions = sorted(set([c for ran in [list(range(
-                        max(0, p - extend), min(len(f[key]), p + extend + 1)))
-                        for p in positions] for c in ran]))
-                    mbeds[uniprot_id][variant] = np.array(f[key])[positions, :]
-
-        outfile = h5_file.parent / 'pkl' / f'h5_slice_{extend}.pkl'
-        self.__library__[extend] = outfile
-        with open(outfile, 'wb') as f:
-            pickle.dump(mbeds, f)
-
-        print(f'read {sum(len(v) for v in mbeds.values())} embeddings '
-              f'for {len(mbeds)} proteins, each SAV with {extend} '
-              f'neighbors on each side, wrote to {outfile}')
-        return mbeds
-
-    def fetch_mbeds(self, extend=0):
-        """
-        Fetch embeddings depending on the number of
-        additional positions each side of a mutation.
-        """
-        # TODO cheating:
-        self.__library__[0] = Path('/home/quirin/PYTHON/mapra/pkl/h5_slice_0.pkl')
-
-        if extend in self.__library__:
-            with open(self.__library__[extend], 'rb') as f:
-                print(f'loading from {self.__library__[extend]}')
-                return pickle.load(f)
-        else:
-            return self._extract_embeds(extend=extend)
-
-    def fetch_numpy_distances(self, df=None, reduced=True, test_sets=None):
-        """
-        For a given pandas DataFrame (or the default df with abbreviated mutation patterns),
-        build a numpy array mapping all three metrics of protein stability change to the
-        changes in the embeddings; saving all 1024 dimensions.
-        :param df: a ProThermDB pandas DataFrame, otherwise self.dataframe_abbrev(reduced=reduced)
-        :param reduced: bool, use the redundancy-reduced dataset or not
-        :param test_set: if a list is passed, the additional new first column is 0 for train rows and 1 for test rows
-        :return:
-        """
-        if test_sets is None:
-            test_sets = {delta: list() for delta in self.order}  # make an empty dummy so lookup works
-        if df is None:
-            df = self.dataframe_abbrev(reduced=reduced)
-        mbeds = self.fetch_mbeds(0)
-
-        # iterate over the embeddings once, then access the smaller
-        # result multiple times to build an array matching the dataframe
-        npdists = dict()
-        for uniprot_id, d in mbeds.items():
-            wt = d.pop('wt')
-            try:
-                # make sure that even if something goes wrong, we put back the wildtype
-                npdists[uniprot_id] = dict()
-                # the variants already come with their array slices of the right size
-                for variant, ar in d.items():
-                    positions = [int(p[:-1]) - 1 for p in variant.split('_')]
-                    # for each mutated position, subtract the wildtype
-                    # from the variant and add up these rows of differences
-                    npdists[uniprot_id][variant] = np.sum(np.subtract(ar, wt[positions, :]),
-                                                          axis=0, keepdims=True)
-            except Exception as ex:
-                raise RuntimeError(f'Something failed for {uniprot_id}') from ex
-            d['wt'] = wt
-
-        # do some pandas magic and a numpy array pops out
-        npr = np.vstack(df.apply(
-            lambda gdf: np.hstack((  # glue to the left side of the row of differences
-                np.array([[int(gdf.UniProt_ID in test_sets[gdf.DELTA]),  # 0/1 if the row belongs to this train/test set
-                           self.order.index(gdf.DELTA),  # which metric was measured
-                           gdf[gdf.DELTA]]], dtype=np.float16),  # and the measured value
-                npdists.get(gdf.UniProt_ID, dict()).get(
-                    gdf.MUTATION, np.zeros((1, 1024), dtype=np.float16))  # fall back to zeroes is needed
-            )), axis=1))
-
-        if not sum(len(k) for k in test_sets.values()):
-            return npr[:, 1:]  # cut off the train/test column
-        return npr
-
-    def fetch_df_with_pairwise_distances(self, extend=0, df=None, reduced=True,
+    def fetch_df_with_pairwise_distances(self, extend=0, df=None, filter=dict(),
                                          modify=None, scaler=None, func=sum, epsilon=0):
         """
         :param extend: The number of additional neighbours to include on each side
-        :param df: optional dataframe, otherwise will be dataframe_abbrev(reduced=reduced)
-        :param reduced: if only the redundancy-reduced dataset shall be loaded from the df
+        :param df: optional dataframe, otherwise will be dataframe_abbrev(filter)
+        :param filter: a filter dict, usually indicating use of the redundancy-reduced dataset {'DATASET': 'reduced_set'}
         :param modify: 'flip' distances for negative changes, use the 'abs' value, only 'pos' or 'neg'
         :param scaler: 'std' or 'minmax'
         :param func: the function to handle compound mutations: np.mean, np.prod, sum, max, min
@@ -328,8 +444,8 @@ class dataset:
         :return:
         """
         if df is None:
-            df = self.dataframe_abbrev(reduced=reduced)
-        mbeds = self.fetch_mbeds(extend)
+            df = self.dataframe_abbrev(filter)
+        mbeds = self._fetch_mbeds(extend)
 
         pdists = dict()
         pairwise_metrics = ['euclidean', 'cosine', 'manhattan']
@@ -399,84 +515,57 @@ class dataset:
 
         return mbed_dists(data=df.copy(deep=True), delta_labels=self.order, metric_labels=pairwise_metrics)
 
-    def fetch_spearman_rhos(self, npr):
-        spears = dict()
-        for i, delta in enumerate(self.order):
-            # select only matching rows, and ignore the delta column
-            dnpr = npr[npr[:, 0] == i, 1:]
-            spear, pval = scipy.stats.spearmanr(dnpr, axis=0)
-            # only need first line[1:] of output matrix
-            spears[delta] = spear[0, 1:]
-        return spears
 
-    def uniprot_train_test_split(self, df=None, reduced=True, test_size=.2, random_state=None):
-        """
-        Splits a ProThermDB dataset into a training and final testing set along
-        UniProt IDs using a given target test size that will be approximately true.
+class elaspic_dataset(dataset):
 
-        :param df: a ProThermDB pandas DataFrame, otherwise self.dataframe_abbrev(reduced=reduced)
-        :param reduced: bool, use the redundancy-reduced dataset or not
-        :param test_size: the target test size, will only be approximately true
-        :param random_state: seed that determines the random selection of the test set
-        :return: Return a dict with delta labels as keys containing a dataclass
-        instance similar to sklearn.model_selection.train_test_split.
-        """
-        assert 0 < test_size < 1, 'invalid test size, must be 0 < test_size < 1'
+    def __init__(self, wd=Path('.').resolve().parent, cheat=False):
+        super().__init__()
+        self.order = ['ddg']
 
-        if df is None:
-            df = self.dataframe_abbrev(reduced=reduced)
-        if random_state is None:
-            random_state = self.__rng__.integers(low=0, high=1000, size=1)[0]
-        local_rng = np.random.default_rng(random_state)
+        el2 = next(wd.rglob('*set-core.parquet'))
 
-        @dataclasses.dataclass
-        class Split:
-            delta: str
-            X: np.array = None
-            X_test: np.array = None
-            y: np.array = None
-            y_true: np.array = None
-            test_set: set = None
-            real_test_size: float = None
-            records_test_size: float = None
+        if cheat:
+            df = pd.read_csv((wd / 'fopra' / el2.name)
+                             .with_suffix('.csv')).drop(columns='Unnamed: 0')
+        else:
+            df = pd.read_parquet(el2)
+            df = df.loc[df.effect_type == 'ΔΔG']
+            df = df.drop(columns=['protein_structure', 'effect_type', 'protein_sequence'])
+            df = df.apply(pd.Series.explode)
+            df = df.reset_index(drop=True)
 
-        splits = dict()
-        test_sets = dict()
-        for i, delta in enumerate(self.order):
-            # get ids for this metric as a sorted list
-            uniprot_ids = sorted(set(df.loc[df.DELTA == delta, 'UniProt_ID']))
-            # calculate how many distinct UniProt IDs will be in the test set
-            abs_test_size = int(np.ceil(len(uniprot_ids) * test_size))
-            assert abs_test_size < len(uniprot_ids), 'no training data left, set smaller test size'
-            # shuffle the sorted list of all UniProt IDs
-            local_rng.shuffle(uniprot_ids)
-            # use leading entries as test set
-            test_set = uniprot_ids[:abs_test_size]
-            # save for fetch_numpy_distances
-            test_sets[delta] = test_set
-            # make and pre-fill the Split dataclass instance
-            splits[delta] = Split(delta=delta, test_set=set(test_set),
-                                  real_test_size=len(test_set) / len(uniprot_ids))
+            # with open(wd / 'fopra' / f'{el2.stem}_variant_effects.pkl', 'rb') as pkl:
+            #     self.__effects__ = pickle.load(pkl)
+            #
+            # # initialize self.__dataframe__
+            # df = pd.DataFrame(self.__effects__.keys(), columns=['name'])
+            # df['effect'] = [[(k, v) for k, v in self.__effects__[n].items()] for n in df.name]
+            # df = df.explode('effect')
+            # df[['MUTATION', 'ddg']] = df.effect.tolist()
+            # df = df.drop(columns='effect')
 
-        # get embedding changes
-        npr = self.fetch_numpy_distances(df=df, test_sets=test_sets)
-        train_filter = npr[:, 0] == 0
-        train_npr, test_npr = npr[train_filter, 1:], npr[~train_filter, 1:]
+            # read in the redundancy-reduced sets
+            rids = dict()
+            for algo in ['cdhit', 'mmseqs']:
+                with open(wd / 'fopra' / f'rr_training_set_{algo}.fasta') as fasta:
+                    rids[algo] = {r.id for r in SeqIO.parse(fasta, 'fasta')}
 
-        def get_features_and_labels_for_delta(ar, i):
-            # select the rows for this delta, and cleave off the delta column
-            dar = ar[ar[:, 0] == i, 1:]
-            # split into features and labels
-            return dar[:, 1:], dar[:, 0].reshape(-1, 1)
+            def id_lookup(gdf):
+                _id = f'{gdf["name"]}_{gdf.unique_id}'
+                if _id in rids['cdhit']:
+                    if _id in rids['mmseqs']:
+                        return 'both'
+                    return 'cdhit'
+                if _id in rids['mmseqs']:
+                    return 'mmseqs'
+                return 'none'
 
-        # records_test_sizes = dict()
-        for i, delta in enumerate(self.order):
-            s = splits[delta]
-            s.X, s.y = get_features_and_labels_for_delta(train_npr, i)
-            s.X_test, s.y_true = get_features_and_labels_for_delta(test_npr, i)
-            s.records_test_size = len(s.y_true) / (len(s.y) + len(s.y_true))
+            df['DATASET'] = df.apply(id_lookup, axis=1)
+            df = df.rename(columns={'name': 'UniProt_ID', 'mutation': 'MUTATION', 'effect': 'ddg'})
+            df['DELTA'] = 'ddg'
+            df.to_csv((wd / 'fopra' / el2.name).with_suffix('.csv'))
+        self.__dataframe__ = df
 
-        pp = lambda it: ':'.join('%.4f' % elem.__getattribute__(it) for elem in splits.values())
-        print(f'split {random_state} targeted {test_size}, '
-              f'real test sizes: {pp("real_test_size")}, record test sizes: {pp("records_test_size")}')
-        return splits
+    def _extract_embeds(self, extend=0, suffix='elaspic',
+                        h5_file=Path('.').resolve().parent / 'elaspic-set.h5'):
+        return super()._extract_embeds(extend=extend, suffix=suffix, h5_file=h5_file)

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
-from prep import dataset
+from mapra import prep
 
-data = dataset(Path('.').resolve().parent)
-
-ar = data.fetch_numpy_distances(test_set=data.uniprot_train_test_split(test_size=.1))
+data = prep.elaspic_dataset(Path('.').resolve().parent)
+data.fetch_numpy_distances(selector={2048: True})
 
 print('driver finished')

@@ -115,8 +115,8 @@ seeds = [0, 1, 2, 3, 4, 5, 6, 1024, 1025, 1026, 1027, 1028, 1029]
 seeds = [0, 1, 2]
 
 if __name__ == '__main__':
-    data = prep.dataset(WD)
-    df = data.dataframe_abbrev(reduced=True)
+    data = prep.protherm_dataset(WD)
+    df = data.dataframe_abbrev({'DATASET': 'reduced_set'})
     (WD / 'txts').mkdir(parents=True, exist_ok=True)
 
     # train repeatedly with different validation sets

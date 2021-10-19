@@ -18,7 +18,7 @@ WD = Path(__file__).resolve().parents[1]  # this is supposed to mean 'working di
 
 sns.set_theme(style='white')
 
-data = prep.dataset(WD)
+data = prep.protherm_dataset(WD)
 npr = data.fetch_numpy_distances()
 spearman_rhos = data.fetch_spearman_rhos(npr)
 delta_labels = data.order
